@@ -9,6 +9,13 @@ using Unit3dDescriptionClone.Serialization;
 
 namespace Unit3dDescriptionClone.Services;
 
+internal enum CloneOutcome
+{
+    Success,
+    AlreadyCloned,
+    Failed,
+}
+
 internal sealed class DescriptionCloner(
     Unit3dApiClient unit3dApi,
     F3nixApiClient f3nixApi,
@@ -38,10 +45,10 @@ internal sealed class DescriptionCloner(
                     continue;
                 }
 
-                var alreadyCloned = await CloneAsync(torrent.Id, skipRehosting, skipAppend, allowRerun);
+                var outcome = await CloneAsync(torrent.Id, skipRehosting, skipAppend, allowRerun);
                 File.WriteAllText(cacheFile,
                     JsonSerializer.Serialize(torrent, AppJsonContext.Default.TorrentInfo));
-                if (alreadyCloned)
+                if (outcome is CloneOutcome.Success or CloneOutcome.AlreadyCloned)
                     await Task.Delay(2000);
             }
 
@@ -50,7 +57,7 @@ internal sealed class DescriptionCloner(
         }
     }
 
-    public async Task<bool> CloneAsync(
+    public async Task<CloneOutcome> CloneAsync(
         string torrentId,
         bool skipRehosting = false,
         bool skipAppend = false,
@@ -58,29 +65,28 @@ internal sealed class DescriptionCloner(
         string? fromTrackerName = null,
         string? fromTorrentId = null)
     {
-        Console.WriteLine($"Cloning description for torrent ID {torrentId}");
-
-        Console.WriteLine($"Fetching torrent info from target tracker (ID {torrentId})...");
         var targetTorrent = await unit3dApi.GetTorrentAsync(torrentId);
         if (targetTorrent == null)
         {
-            Console.WriteLine("Target torrent not found on api, skipping.");
-            return false;
+            Console.WriteLine($"Cloning {torrentId}...");
+            Console.WriteLine("Target torrent not found on api");
+            return CloneOutcome.Failed;
         }
+        Console.WriteLine($"Cloning {targetTorrent.Attributes.Name}...");
         if (!allowRerun && targetTorrent!.Attributes.Description.Contains(OriginalInfoSpoilerTag, StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine("Target description already contains original info spoiler, skipping. Use --allow-rerun to override.");
-            return true;
+            Console.WriteLine("Success");
+            return CloneOutcome.AlreadyCloned;
         }
 
         var lookupFile = targetTorrent!.Attributes.Files.FirstOrDefault();
         if (lookupFile == null)
         {
-            Console.WriteLine("Target does not report any files for comparison, aborting.");
-            return false;
+            Console.WriteLine("Target does not report any files for comparison");
+            return CloneOutcome.Failed;
         }
         var lookupFileName = Path.GetFileName(lookupFile.Name);
-        Console.WriteLine($"Torrent name: {targetTorrent.Attributes.Name}");
         Console.WriteLine($"Lookup file: {lookupFileName}");
 
         async Task MarkTrumpableAsync(string reason, string? appendTag = null)
@@ -105,8 +111,8 @@ internal sealed class DescriptionCloner(
 
         if (IsTrumpableName(targetTorrent.Attributes.Name))
         {
-            Console.WriteLine("Torrent already marked -TRUMPABLE, skipping.");
-            return false;
+            Console.WriteLine("Torrent already marked -TRUMPABLE");
+            return CloneOutcome.Failed;
         }
 
         IReadOnlyList<FromTrackerConfig> fromTrackers = fromTrackerName is null
@@ -115,10 +121,15 @@ internal sealed class DescriptionCloner(
                 fromTracker.Url.Contains(fromTrackerName, StringComparison.OrdinalIgnoreCase))];
         if (fromTrackers.Count == 0)
         {
-            Console.WriteLine(fromTrackerName is null
-                ? "No matching [from_tracker] found for this torrent name, aborting."
-                : $"No [from_tracker] named '{fromTrackerName}' found, aborting.");
-            return false;
+            if (fromTrackerName is null)
+            {
+                Console.WriteLine("No matching [from_tracker] found for this torrent name");
+            }
+            else
+            {
+                Console.WriteLine($"No [from_tracker] named '{fromTrackerName}' found");
+            }
+            return CloneOutcome.Failed;
         }
         SourceTorrentResult? sourceResult = null;
         foreach (var fromTracker in fromTrackers)
@@ -175,16 +186,17 @@ internal sealed class DescriptionCloner(
         }
         if (sourceResult is null)
         {
-            Console.WriteLine("No matching torrent found on any source tracker, marking trumpable for review.");
             await MarkTrumpableAsync("No matching torrent found on any source tracker.", "-TOREVIEW");
-            return false;
+            Console.WriteLine("No matching torrent found on any source tracker.");
+            return CloneOutcome.Failed;
         }
 
         var isTrumpable = IsTrumpable(targetTorrent.Attributes, sourceResult, out var trumpableReason);
         if (isTrumpable)
         {
             await MarkTrumpableAsync(trumpableReason!);
-            return false;
+            Console.WriteLine(trumpableReason);
+            return CloneOutcome.Failed;
         }
 
         var description = new StringBuilder(sourceResult.Description);
@@ -222,7 +234,10 @@ internal sealed class DescriptionCloner(
         description.Append("[/code]");
 
         if (!skipRehosting && !await RehostImagesAsync(description))
-            return false;
+        {
+            Console.WriteLine("Image rehosting failed");
+            return CloneOutcome.Failed;
+        }
 
         if (originalDescriptionSpoiler is not null)
             description.Append(originalDescriptionSpoiler);
@@ -237,7 +252,8 @@ internal sealed class DescriptionCloner(
 
         await web.EnsureLoggedInAsync();
         await SubmitEditAsync(torrentId, description.ToString(), mediaInfo, null);
-        return false;
+        Console.WriteLine("Success");
+        return CloneOutcome.Success;
     }
 
     private static bool IsTrumpable(TorrentAttributes targetTorrent, SourceTorrentResult sourceTorrent, out string? reason)

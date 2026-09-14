@@ -12,7 +12,6 @@ internal static class CookieStore
         if (!File.Exists(filePath))
             return container;
 
-        Console.WriteLine("Loading cached session cookies...");
         var json = File.ReadAllText(filePath);
         var cookies = System.Text.Json.JsonSerializer.Deserialize(json, AppJsonContext.Default.ListCookieData);
         if (cookies is null)

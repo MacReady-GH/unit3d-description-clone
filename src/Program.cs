@@ -76,9 +76,19 @@ var web = new Unit3dWebClient(noRedirectClient, autoRedirectClient, cookies, con
 var imageRehoster = new ImageRehoster(autoRedirectClient, config);
 var cloner = new DescriptionCloner(unit3dApi, f3nixApi, torznabApi, web, imageRehoster, config);
 
-if (positional[0] == "backfill")
-    await cloner.BackfillAsync(positional[1], positional[2], skipRehosting, skipAppend, allowRerun);
-else
-    await cloner.CloneAsync(positional[0], skipRehosting, skipAppend, allowRerun, fromTrackerName, fromTorrentId);
+try
+{
+    if (positional[0] == "backfill")
+    {
+        await cloner.BackfillAsync(positional[1], positional[2], skipRehosting, skipAppend, allowRerun);
+        return 0;
+    }
 
-return 0;
+    var outcome = await cloner.CloneAsync(positional[0], skipRehosting, skipAppend, allowRerun, fromTrackerName, fromTorrentId);
+    return outcome == CloneOutcome.Failed ? 1 : 0;
+}
+catch (Exception ex)
+{
+    Console.WriteLine(ex.Message);
+    return 1;
+}
