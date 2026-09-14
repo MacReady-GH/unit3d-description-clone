@@ -76,7 +76,6 @@ internal sealed class DescriptionCloner(
         if (!allowRerun && targetTorrent!.Attributes.Description.Contains(OriginalInfoSpoilerTag, StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine("Target description already contains original info spoiler, skipping. Use --allow-rerun to override.");
-            Console.WriteLine("Success");
             return CloneOutcome.AlreadyCloned;
         }
 
@@ -252,7 +251,7 @@ internal sealed class DescriptionCloner(
 
         await web.EnsureLoggedInAsync();
         await SubmitEditAsync(torrentId, description.ToString(), mediaInfo, null);
-        Console.WriteLine("Success");
+        Console.WriteLine($"Success {config.ToTrackerUrl}/torrents/{torrentId}");
         return CloneOutcome.Success;
     }
 
