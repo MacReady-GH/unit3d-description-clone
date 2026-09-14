@@ -68,11 +68,11 @@ internal sealed class DescriptionCloner(
         var targetTorrent = await unit3dApi.GetTorrentAsync(torrentId);
         if (targetTorrent == null)
         {
-            Console.WriteLine($"Cloning {torrentId}...");
+            Console.WriteLine($"Cloning {config.ToTrackerUrl}/torrents/{torrentId}...");
             Console.WriteLine("Target torrent not found on api");
             return CloneOutcome.Failed;
         }
-        Console.WriteLine($"Cloning {targetTorrent.Attributes.Name}...");
+        Console.WriteLine($"Cloning {config.ToTrackerUrl}/torrents/{torrentId} ({targetTorrent.Attributes.Name}) ...");
         if (!allowRerun && targetTorrent!.Attributes.Description.Contains(OriginalInfoSpoilerTag, StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine("Target description already contains original info spoiler, skipping. Use --allow-rerun to override.");
@@ -251,7 +251,7 @@ internal sealed class DescriptionCloner(
 
         await web.EnsureLoggedInAsync();
         await SubmitEditAsync(torrentId, description.ToString(), mediaInfo, null);
-        Console.WriteLine($"Success {config.ToTrackerUrl}/torrents/{torrentId}");
+        Console.WriteLine($"Success");
         return CloneOutcome.Success;
     }
 
