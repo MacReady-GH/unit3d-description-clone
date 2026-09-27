@@ -136,6 +136,12 @@ Backfill all torrents on the target tracker whose name matches a release group, 
 unit3d-description-clone [--no-rehost] [--no-append] [--allow-rerun] backfill "<release group name>" "<uploader username>"
 ```
 
+Print a comma-separated list of all release groups configured in the `release_group` values of every `[from_tracker]` section, then exit:
+
+```
+unit3d-description-clone groups
+```
+
 ### Flags
 
 | Flag | Description |

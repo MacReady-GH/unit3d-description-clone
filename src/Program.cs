@@ -55,6 +55,7 @@ if (positional.Count == 0 || (positional[0] == "backfill" && positional.Count < 
     Console.Error.WriteLine("Usage:");
     Console.Error.WriteLine("  unit3d-description-clone [--no-rehost] [--no-append] [--allow-rerun] [--from-id <from-tracker>/<id>] <torrent-id>");
     Console.Error.WriteLine("  unit3d-description-clone [--no-rehost] [--no-append] [--allow-rerun] backfill <release-group> <uploader>");
+    Console.Error.WriteLine("  unit3d-description-clone groups");
     return 1;
 }
 if (positional[0] == "backfill" && fromTorrentId is not null)
@@ -64,6 +65,12 @@ if (positional[0] == "backfill" && fromTorrentId is not null)
 }
 
 var config = AppConfig.Load("unit3d-description-clone.ini");
+
+if (positional[0] == "groups")
+{
+    Console.WriteLine(string.Join(", ", config.FromTrackers.SelectMany(ft => ft.ReleaseGroups)));
+    return 0;
+}
 
 var cookies = CookieStore.Load("cache/target-cookies.json", config.ToTrackerUrl);
 using var noRedirectClient = HttpClientFactory.Create(cookies, followRedirects: false);
