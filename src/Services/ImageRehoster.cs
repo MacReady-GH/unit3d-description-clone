@@ -66,6 +66,19 @@ internal sealed class ImageRehoster(HttpClient client, AppConfig config)
         && TemporarilyPausedHosts.Any(h => uri.Host.Equals(h, StringComparison.OrdinalIgnoreCase)
             || uri.Host.EndsWith("." + h, StringComparison.OrdinalIgnoreCase));
 
+    // A/B comparison-tool sites: each page holds several distinct comparison images (different
+    // encodes side by side), not one image at different sizes - so "the biggest image on the page"
+    // or its og:image meta tag is never a "full resolution" version of anything, just an arbitrary,
+    // unrelated image. CandidateFullUrls below refuses its generic page-scrape fallback for these
+    // hosts entirely; a link on one of these hosts is only ever used if it's already a raw image URL.
+    private static readonly HashSet<string> ComparisonToolHosts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "slow.pics", "i.slow.pics", "imgsli.com", "comp.pics", "diff.pics",
+    };
+
+    private static bool IsComparisonToolHost(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && ComparisonToolHosts.Contains(uri.Host);
+
     public async Task<RehostResult> RehostAsync(string imageUrl)
     {
         if (IsTemporarilyPausedHost(imageUrl))
@@ -109,22 +122,8 @@ internal sealed class ImageRehoster(HttpClient client, AppConfig config)
         }
 
         var contentType = imageResp.Content.Headers.ContentType?.MediaType ?? "";
-        var rawStream = await imageResp.Content.ReadAsStreamAsync();
+        var uploadStream = await imageResp.Content.ReadAsStreamAsync();
         var fileName = Path.GetFileName(new Uri(imageUrl).LocalPath);
-
-        Stream uploadStream;
-        if (contentType.Contains("svg", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
-        {
-            Console.WriteLine("    Converting SVG to PNG...");
-            uploadStream = ConvertSvgToPng(rawStream);
-            fileName = Path.ChangeExtension(fileName, ".png");
-            contentType = "image/png";
-        }
-        else
-        {
-            uploadStream = rawStream;
-        }
 
         using var uploadBuffer = new MemoryStream();
         await uploadStream.CopyToAsync(uploadBuffer);
@@ -289,10 +288,16 @@ internal sealed class ImageRehoster(HttpClient client, AppConfig config)
 
         // Generic fallback for any other gallery/host: the page's own og:image meta tag. This is what the
         // original ibb.co/beyondhd.co-specific branches did - generalized here to any host, since nothing
-        // about reading a page's og:image is actually host-specific.
-        var ogImage = await TryScrapePageAsync(hrefUrl, "//meta[@property='og:image']", "content");
-        if (ogImage is not null)
-            yield return ogImage;
+        // about reading a page's og:image is actually host-specific. Refused outright for a known
+        // comparison-tool host (see ComparisonToolHosts) - a link there is only ever used as a candidate
+        // if it's already a raw image URL (the "try the href itself" candidate above), never by scraping
+        // the page for some image, since that would be one of several unrelated comparison shots.
+        if (!IsComparisonToolHost(hrefUrl))
+        {
+            var ogImage = await TryScrapePageAsync(hrefUrl, "//meta[@property='og:image']", "content");
+            if (ogImage is not null)
+                yield return ogImage;
+        }
     }
 
     private async Task<string?> TryScrapePageAsync(string pageUrl, string xpath, string attribute)
@@ -375,19 +380,4 @@ internal sealed class ImageRehoster(HttpClient client, AppConfig config)
         return (null, FetchStatus.TemporarilyUnavailable);
     }
 
-    private static Stream ConvertSvgToPng(Stream svgStream)
-    {
-        var svgDoc = new Svg.Skia.SKSvg();
-        svgDoc.Load(svgStream);
-        var bounds = svgDoc.Picture!.CullRect;
-        using var bitmap = new SkiaSharp.SKBitmap((int)bounds.Width, (int)bounds.Height);
-        using var canvas = new SkiaSharp.SKCanvas(bitmap);
-        canvas.Clear(SkiaSharp.SKColors.Transparent);
-        canvas.DrawPicture(svgDoc.Picture);
-        canvas.Flush();
-        var pngData = bitmap.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
-        var stream = pngData.AsStream();
-        stream.Position = 0;
-        return stream;
-    }
 }

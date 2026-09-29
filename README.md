@@ -32,9 +32,9 @@ remain accessible on the target tracker.
    wrapper is checked for a genuinely higher-resolution version behind the click-through
    link (verified by size against the embedded thumbnail, not just accepted on faith) -
    if one is found, it is uploaded separately and used as the click-through target while
-   the thumbnail stays the visible image. SVG images are converted to PNG before
-   uploading. Images listed in `[known_images]` are substituted directly without
-   re-uploading. (This step can be skipped with `--no-rehost`.)
+   the thumbnail stays the visible image. SVG images are uploaded as-is (not converted to
+   PNG). Images listed in `[known_images]` are substituted directly without re-uploading.
+   (This step can be skipped with `--no-rehost`.)
 
    An image that is confirmed dead (its source returns 404/410) is left pointing at its
    original link unless `placeholder_image` is configured, in which case only that
@@ -58,6 +58,14 @@ remain accessible on the target tracker.
    itself is on imgbox.com, or only its click-through wrapper is (the visible thumbnail
    still rehosts normally in that case). Remove `imgbox.com` from the hardcoded list once
    the host is confirmed back up.
+
+   A handful of A/B comparison-tool sites (`slow.pics`, `imgsli.com`, `comp.pics`,
+   `diff.pics`) are also hardcoded, for a different reason: each page there holds several
+   distinct comparison images side by side, not one image at different sizes, so guessing
+   "the full-resolution version" from that page (its `og:image` tag, or the biggest image
+   found on it) would just grab an arbitrary, unrelated comparison shot. A click-through
+   link on one of these hosts is only ever used as-is if it's already a direct image URL;
+   the page-scrape fallback is skipped for them entirely.
 12. The optional `[description_append]` config section is appended to the final description
     unless skipped with `--no-append`.
 13. The tool logs in to the target tracker (caching the session in `cache/`), opens the
