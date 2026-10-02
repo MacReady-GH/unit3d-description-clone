@@ -139,6 +139,66 @@ internal sealed class ImageRehoster(HttpClient client, AppConfig config)
         hostLastRequestTime[uri.Host] = DateTime.UtcNow;
     }
 
+    // A download is judged by whether bytes are still ARRIVING, not by how long it's taken in
+    // total - same as watching a page load in a browser: as long as new data keeps coming, it's
+    // working, however slowly. StallTimeoutSeconds is the longest gap allowed with zero new
+    // bytes before giving up on a connection that's gone genuinely silent - it resets on every
+    // chunk actually received, unlike HttpClient's own Timeout (not used for this client - see
+    // Program.cs - since that one caps the ENTIRE request including the body download in one
+    // combined window, the exact problem this replaces). HardCapSeconds is a last-resort sanity
+    // backstop only, for the pathological case of a connection that trickles just fast enough to
+    // never go quiet.
+    //
+    // Built after a real case (seedpool 122605 in the companion Python migration tool, a UHD
+    // REMUX with several large beyondhd.co screenshots): the same flat "whole download must
+    // finish within N seconds" shape meant a torrent like this was close to guaranteed to fail
+    // every one of its retries even though every file would eventually arrive if actually given
+    // the time - the same way a slow page keeps loading in a browser instead of erroring out.
+    private const int StallTimeoutSeconds = 60;
+    private const int HardCapSeconds = 120;
+    private const long ProgressLogIntervalBytes = 5 * 1024 * 1024;
+
+    private static async Task<byte[]> DownloadBytesWithProgressAsync(HttpResponseMessage resp, string url)
+    {
+        var stream = await resp.Content.ReadAsStreamAsync();
+        using var buffer = new MemoryStream();
+        var chunk = new byte[262144];
+        long total = 0;
+        long lastLogged = 0;
+        var start = DateTime.UtcNow;
+
+        while (true)
+        {
+            using var stallCts = new CancellationTokenSource(TimeSpan.FromSeconds(StallTimeoutSeconds));
+            int read;
+            try
+            {
+                read = await stream.ReadAsync(chunk, 0, chunk.Length, stallCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException($"{url}: no data for {StallTimeoutSeconds}s (stalled after {total} bytes)");
+            }
+
+            if (read == 0)
+                break;
+
+            buffer.Write(chunk, 0, read);
+            total += read;
+
+            if ((DateTime.UtcNow - start).TotalSeconds > HardCapSeconds)
+                throw new TimeoutException($"{url}: exceeded {HardCapSeconds}s total despite ongoing progress ({total} bytes so far)");
+
+            if (total - lastLogged >= ProgressLogIntervalBytes)
+            {
+                Console.WriteLine($"    ... still downloading {url}: {total / 1e6:F1}MB so far ({(DateTime.UtcNow - start).TotalSeconds:F0}s elapsed)");
+                lastLogged = total;
+            }
+        }
+
+        return buffer.ToArray();
+    }
+
     public async Task<RehostResult> RehostAsync(string imageUrl)
     {
         if (IsTemporarilyPausedHost(imageUrl))
@@ -182,12 +242,19 @@ internal sealed class ImageRehoster(HttpClient client, AppConfig config)
         }
 
         var contentType = imageResp.Content.Headers.ContentType?.MediaType ?? "";
-        var uploadStream = await imageResp.Content.ReadAsStreamAsync();
         var fileName = Path.GetFileName(new Uri(imageUrl).LocalPath);
 
-        using var uploadBuffer = new MemoryStream();
-        await uploadStream.CopyToAsync(uploadBuffer);
-        var uploadBytes = uploadBuffer.ToArray();
+        byte[] uploadBytes;
+        try
+        {
+            uploadBytes = await DownloadBytesWithProgressAsync(imageResp, imageUrl);
+        }
+        catch (TimeoutException e)
+        {
+            var detail = $"download stalled or ran too long ({e.Message}) - leaving the original link as-is, may succeed on a later run";
+            Console.WriteLine($"    {detail}");
+            return new RehostResult(RehostStatus.TemporarilyUnavailable, null, detail);
+        }
 
         var resp = await SendWithRetryAsync(() =>
         {
@@ -407,7 +474,7 @@ internal sealed class ImageRehoster(HttpClient client, AppConfig config)
             var contentType = resp.Content.Headers.ContentType?.MediaType ?? "";
             if (!contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
                 return null;
-            return await resp.Content.ReadAsByteArrayAsync();
+            return await DownloadBytesWithProgressAsync(resp, url);
         }
     }
 
